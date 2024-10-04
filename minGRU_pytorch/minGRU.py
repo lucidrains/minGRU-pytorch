@@ -4,6 +4,9 @@ import torch
 import torch.nn.functional as F
 from torch.nn import Linear, Module
 
+def exists(v):
+    return v is not None
+
 # appendix B
 # https://github.com/glassroom/heinsen_sequence
 
@@ -29,12 +32,27 @@ class minGRU(Module):
         super().__init__()
         self.to_hidden_and_gate = Linear(dim, dim * 2, bias = False)
 
-    def forward(self, x):
+    def forward(self, x, prev_hidden = None):
+        seq_len = x.shape[1]
         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim = -1)
 
-        log_z = -F.softplus(-gate)
-        log_coeffs = -F.softplus(gate)
-        log_tilde_h = log_g(hidden)
+        # handle sequential
 
-        out = heinsen_associative_scan_log(log_coeffs, log_z + log_tilde_h)
-        return out
+        if seq_len == 1:
+            gate = gate.sigmoid()
+            return torch.lerp(prev_hidden, hidden, gate) if exists(prev_hidden) else (hidden * gate)
+
+        # parallel
+
+        log_coeffs = -F.softplus(gate)
+
+        log_z = -F.softplus(-gate)
+        log_tilde_h = log_g(hidden)
+        log_values = log_z + log_tilde_h
+
+        if exists(prev_hidden):
+            log_values = torch.cat((log_g(prev_hidden), log_values), dim = 1)
+            log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
+
+        out = heinsen_associative_scan_log(log_coeffs, log_values)
+        return out[:, -seq_len:]
