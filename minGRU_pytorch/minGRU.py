@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn.functional as F
-from torch.nn import Linear, Module
+from torch.nn import Linear, Identity, Module
 
 def exists(v):
     return v is not None
@@ -28,32 +28,37 @@ def log_g(x):
 # they enforce the hidden states to be positive
 
 class minGRU(Module):
-    def __init__(self, dim):
+    def __init__(self, dim, expansion_factor = 1.):
         super().__init__()
-        self.to_hidden_and_gate = Linear(dim, dim * 2, bias = False)
+
+        dim_inner = int(dim * expansion_factor)
+        self.to_hidden_and_gate = Linear(dim, dim_inner * 2, bias = False)
+        self.to_out = Linear(dim_inner, dim, bias = False) if expansion_factor != 1. else Identity()
 
     def forward(self, x, prev_hidden = None):
         seq_len = x.shape[1]
         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim = -1)
 
-        # handle sequential
-
         if seq_len == 1:
+            # handle sequential
+
             hidden = g(hidden)
             gate = gate.sigmoid()
-            return torch.lerp(prev_hidden, hidden, gate) if exists(prev_hidden) else (hidden * gate)
+            out = torch.lerp(prev_hidden, hidden, gate) if exists(prev_hidden) else (hidden * gate)
+        else:
+            # parallel
 
-        # parallel
+            log_coeffs = -F.softplus(gate)
 
-        log_coeffs = -F.softplus(gate)
+            log_z = -F.softplus(-gate)
+            log_tilde_h = log_g(hidden)
+            log_values = log_z + log_tilde_h
 
-        log_z = -F.softplus(-gate)
-        log_tilde_h = log_g(hidden)
-        log_values = log_z + log_tilde_h
+            if exists(prev_hidden):
+                log_values = torch.cat((log_g(prev_hidden), log_values), dim = 1)
+                log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
 
-        if exists(prev_hidden):
-            log_values = torch.cat((log_g(prev_hidden), log_values), dim = 1)
-            log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
+            out = heinsen_associative_scan_log(log_coeffs, log_values)
+            out = out[:, -seq_len:]
 
-        out = heinsen_associative_scan_log(log_coeffs, log_values)
-        return out[:, -seq_len:]
+        return self.to_out(out)

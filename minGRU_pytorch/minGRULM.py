@@ -33,7 +33,8 @@ class minGRULM(Module):
         num_tokens,
         dim,
         depth,
-        ff_mult = 4
+        ff_mult = 4,
+        min_gru_expansion = 1.5
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -43,7 +44,7 @@ class minGRULM(Module):
         for _ in range(depth):
             self.layers.append(ModuleList([
                 RMSNorm(dim),
-                minGRU(dim),
+                minGRU(dim, expansion_factor = min_gru_expansion),
                 RMSNorm(dim),
                 FeedForward(dim, mult = ff_mult)
             ]))
