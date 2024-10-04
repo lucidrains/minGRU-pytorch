@@ -8,7 +8,7 @@ from torch.nn import Linear, Module
 # https://github.com/glassroom/heinsen_sequence
 
 def heinsen_associative_scan_log(log_coeffs, log_values):
-    a_star = log_coeffs.cumsum(dim = -1)
+    a_star = log_coeffs.cumsum(dim = 1)
     log_h0_plus_b_star = (log_values - a_star).logcumsumexp(dim = 1)
     log_h = a_star + log_h0_plus_b_star
     return log_h.exp()

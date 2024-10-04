@@ -23,6 +23,14 @@ out = min_gru(x)
 assert x.shape == out.shape
 ```
 
+## Test
+
+enwik8
+
+```bash
+$ python train.py
+```
+
 ## Citations
 
 ```bibtex
