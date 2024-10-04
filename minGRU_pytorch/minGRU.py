@@ -39,6 +39,7 @@ class minGRU(Module):
         # handle sequential
 
         if seq_len == 1:
+            hidden = g(hidden)
             gate = gate.sigmoid()
             return torch.lerp(prev_hidden, hidden, gate) if exists(prev_hidden) else (hidden * gate)
 
