@@ -1,6 +1,6 @@
 ## minGRU
 
-Implementation of the proposed <a href="https://arxiv.org/abs/2410.01201v1">minGRU</a> in Pytorch
+Implementation of the proposed <a href="https://arxiv.org/abs/2410.01201v1">minGRU</a> in Pytorch, only the log-space numerically stable version.
 
 ## Install
 
