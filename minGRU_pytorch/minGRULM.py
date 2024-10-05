@@ -24,6 +24,20 @@ def FeedForward(dim, mult = 4):
         nn.Linear(dim_inner, dim)
     )
 
+# conv
+
+class DepthWiseConv1d(Module):
+    def __init__(self, dim, kernel_size):
+        super().__init__()
+        padding = kernel_size // 2
+        self.net = nn.Sequential(
+            nn.Conv1d(dim, dim, kernel_size = kernel_size, padding = padding, groups = dim),
+            nn.Conv1d(dim, dim, kernel_size = 1)
+        )
+    def forward(self, x):
+        x = self.net(x.transpose(1, 2))
+        return x.transpose(1, 2)
+
 # main class
 
 class minGRULM(Module):
@@ -34,7 +48,8 @@ class minGRULM(Module):
         dim,
         depth,
         ff_mult = 4,
-        min_gru_expansion = 1.5
+        min_gru_expansion = 1.5,
+        conv_kernel_size = 3
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -43,6 +58,7 @@ class minGRULM(Module):
 
         for _ in range(depth):
             self.layers.append(ModuleList([
+                DepthWiseConv1d(dim, conv_kernel_size),
                 RMSNorm(dim),
                 minGRU(dim, expansion_factor = min_gru_expansion),
                 RMSNorm(dim),
@@ -63,7 +79,9 @@ class minGRULM(Module):
 
         x = self.token_emb(x)
 
-        for norm, mingru, ff_norm, ff in self.layers:
+        for conv, norm, mingru, ff_norm, ff in self.layers:
+
+            x = conv(x) + x
 
             x = mingru(norm(x)) + x
 
