@@ -26,17 +26,19 @@ def FeedForward(dim, mult = 4):
 
 # conv
 
-class DepthWiseConv1d(Module):
+class CausalDepthWiseConv1d(Module):
     def __init__(self, dim, kernel_size):
         super().__init__()
-        padding = kernel_size // 2
+        self.kernel_size = kernel_size
         self.net = nn.Sequential(
-            nn.Conv1d(dim, dim, kernel_size = kernel_size, padding = padding, groups = dim),
+            nn.Conv1d(dim, dim, kernel_size = kernel_size, groups = dim),
             nn.Conv1d(dim, dim, kernel_size = 1)
         )
     def forward(self, x):
-        x = self.net(x.transpose(1, 2))
-        return x.transpose(1, 2)
+        x = x.transpose(1, 2) # b n d -> b d n
+        x = F.pad(x, (self.kernel_size - 1, 0), value = 0.)
+        x = self.net(x)
+        return x.transpose(1, 2) # b d n -> b n d
 
 # main class
 
@@ -58,7 +60,7 @@ class minGRULM(Module):
 
         for _ in range(depth):
             self.layers.append(ModuleList([
-                DepthWiseConv1d(dim, conv_kernel_size),
+                CausalDepthWiseConv1d(dim, conv_kernel_size),
                 RMSNorm(dim),
                 minGRU(dim, expansion_factor = min_gru_expansion),
                 RMSNorm(dim),
