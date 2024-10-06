@@ -48,8 +48,8 @@ def gumbel_noise(t):
     noise = torch.zeros_like(t).uniform_(0, 1)
     return -log(-log(noise))
 
-def gumbel_sample(t, temperature = 1., dim = -1):
-    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
+def gumbel_sample(t, temperature = 1., dim = -1, keepdim = True):
+    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim, keepdim = keepdim)
 
 def top_k(logits, thres = 0.9):
     k = math.ceil((1 - thres) * logits.shape[-1])
@@ -68,14 +68,16 @@ def base_decoding(
     prompt_seq_len, out = prompt.shape[-1], prompt.clone()
     sample_num_times = max(0, seq_len - prompt_seq_len)
 
+    prev_hiddens = None
+
     for _ in range(sample_num_times):
-        logits = net(out)
+        logits, prev_hiddens = net(out, return_prev_hiddens = True)
         logits = logits[:, -1]
 
         logits = top_k(logits, thres = filter_thres)
         sample = gumbel_sample(logits, temperature = temperature, dim = -1)
 
-        out = torch.cat((out, sample[..., None]), dim = -1)
+        out = torch.cat((out, sample), dim = -1)
 
     return out[..., prompt_seq_len:]
 

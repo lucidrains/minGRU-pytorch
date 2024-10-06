@@ -35,7 +35,7 @@ class minGRU(Module):
         self.to_hidden_and_gate = Linear(dim, dim_inner * 2, bias = False)
         self.to_out = Linear(dim_inner, dim, bias = False) if expansion_factor != 1. else Identity()
 
-    def forward(self, x, prev_hidden = None):
+    def forward(self, x, prev_hidden = None, return_next_prev_hidden = False):
         seq_len = x.shape[1]
         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim = -1)
 
@@ -61,4 +61,11 @@ class minGRU(Module):
             out = heinsen_associative_scan_log(log_coeffs, log_values)
             out = out[:, -seq_len:]
 
-        return self.to_out(out)
+        next_prev_hidden = out[:, -1:]
+
+        out = self.to_out(out)
+
+        if not return_next_prev_hidden:
+            return out
+
+        return out, next_prev_hidden
