@@ -230,15 +230,18 @@ if __name__ == '__main__':
 
     import sentencepiece as spm
 
-    print("Training the SentencePiece tokenizer on 'data/dataset.txt'...")
-    spm.SentencePieceTrainer.Train(
-        input='data/dataset.txt',
-        model_prefix='tokenizer',
-        vocab_size=32768,  # Adjust vocab size as needed
-        character_coverage=1.0,
-        model_type='bpe'  # You can also try 'unigram' or other types
-    )
-
+    tokenizer_model = 'tokenizer.model'
+    if not os.path.exists(tokenizer_model):
+        print("Training the SentencePiece tokenizer on 'data/dataset.txt'...")
+        spm.SentencePieceTrainer.Train(
+            input=dataset_file,
+            model_prefix='tokenizer',
+            vocab_size=32768,  # Adjust vocab size as needed
+            character_coverage=1.0,
+            model_type='bpe'  # You can also try 'unigram' or other types
+        )
+    else:
+        print(f"'{tokenizer_model}' already exists. Skipping training...")
     print("Loading the trained SentencePiece tokenizer...")
     sp = spm.SentencePieceProcessor()
     sp.load('tokenizer.model')
