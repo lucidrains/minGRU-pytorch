@@ -264,7 +264,7 @@ if __name__ == '__main__':
 
     print("Tokenizing the dataset using batch processing and multiprocessing...")
     with Pool(processes=num_processes) as pool:
-        tokenized_batches = list(tqdm.tqdm(
+        tokenized_batches = list(tqdm(
             pool.imap(tokenize_batch, batches),
             total=len(batches),
             desc="Tokenizing"
