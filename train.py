@@ -15,7 +15,37 @@ import sentencepiece as spm
 
 from minGRU_pytorch.minGRULM import minGRULM
 
-def main(rank, world_size, train_data, val_data):
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+class TokenizedTextDataset(Dataset):
+    def __init__(self, data_file, seq_len):
+        self.data_file = data_file
+        self.seq_len = seq_len
+        self.data = np.load(self.data_file, allow_pickle=True)
+
+    def __len__(self):
+        return (len(self.data) - self.seq_len) // self.seq_len
+
+    def __getitem__(self, index):
+        start_idx = index * self.seq_len
+        end_idx = start_idx + self.seq_len + 1
+        full_seq = torch.tensor(self.data[start_idx:end_idx], dtype=torch.long)
+        return full_seq
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Exclude the data attribute from being pickled
+        state['data'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Re-load the data
+        self.data = np.load(self.data_file, allow_pickle=True)
+
+
+def main(rank, world_size, train_data_file, val_data_file, args):
     try:
         # Initialize the process group only if world_size > 1
         if world_size > 1:
@@ -27,18 +57,24 @@ def main(rank, world_size, train_data, val_data):
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             rank = 0  # Since there's only one process
 
-        print(f"Using device: {device}")
+        if rank == 0:
+            print(f"Using device: {device}")
 
-        # Constants
-        NUM_BATCHES = int(1e5)
-        BATCH_SIZE = 8
-        GRAD_ACCUM_EVERY = 1
-        LEARNING_RATE = 1e-4
-        VALIDATE_EVERY = 100
-        PRIME_LENGTH = 128
-        GENERATE_EVERY = 500
-        GENERATE_LENGTH = 256
-        SEQ_LEN = 1024
+        val_data = np.load(val_data_file, allow_pickle=True)
+        val_data = val_data.tolist()
+
+        # Constants and Hyperparameters
+        NUM_EPOCHS = args.num_epochs  # Number of epochs to train
+        BATCH_SIZE = args.batch_size
+        GRAD_ACCUM_EVERY = args.grad_accum_every
+        LEARNING_RATE = args.learning_rate
+        VALIDATE_EVERY = args.validate_every
+        CHECKPOINT_EVERY = args.checkpoint_every  # Save checkpoint every n steps
+        CHECKPOINT_PATH = args.checkpoint_path  # Path to load checkpoint (if any)
+        PRIME_LENGTH = 64
+        GENERATE_EVERY = args.generate_every
+        GENERATE_LENGTH = 128
+        SEQ_LEN = 512
 
         # Load the SentencePiece tokenizer
         sp = spm.SentencePieceProcessor()
@@ -60,24 +96,9 @@ def main(rank, world_size, train_data, val_data):
         if world_size > 1:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank)
 
-        # Define the dataset class
-        class TokenizedTextDataset(Dataset):
-            def __init__(self, data, seq_len):
-                self.data = data
-                self.seq_len = seq_len
-
-            def __len__(self):
-                return (len(self.data) - self.seq_len) // self.seq_len
-
-            def __getitem__(self, index):
-                start_idx = index * self.seq_len
-                end_idx = start_idx + self.seq_len + 1
-                full_seq = torch.tensor(self.data[start_idx:end_idx], dtype=torch.long)
-                return full_seq
-
         # Create datasets
-        train_dataset = TokenizedTextDataset(train_data, SEQ_LEN)
-        val_dataset = TokenizedTextDataset(val_data, SEQ_LEN)
+        train_dataset = TokenizedTextDataset(train_data_file, SEQ_LEN)
+        val_dataset = TokenizedTextDataset(val_data_file, SEQ_LEN)
 
         # Create Distributed Samplers if world_size > 1
         if world_size > 1:
@@ -88,14 +109,36 @@ def main(rank, world_size, train_data, val_data):
             val_sampler = None
 
         # Create DataLoaders
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler, shuffle=(train_sampler is None), num_workers=2, pin_memory=True)
-        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler, shuffle=False, num_workers=2, pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler,
+                                  shuffle=(train_sampler is None), num_workers=0, pin_memory=True)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler,
+                                shuffle=False, num_workers=0, pin_memory=True)
 
         # Optimizer
         optim = Adam(model.parameters(), lr=LEARNING_RATE)
 
         # Mixed Precision Training
         scaler = GradScaler()
+
+        # Initialize training state
+        start_epoch = 0
+        start_step = 0
+
+        # Checkpoint Loading
+        if CHECKPOINT_PATH and os.path.isfile(CHECKPOINT_PATH):
+            if rank == 0:
+                print(f"Loading checkpoint from {CHECKPOINT_PATH}")
+            checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optim.load_state_dict(checkpoint['optimizer_state_dict'])
+            scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            start_epoch = checkpoint['epoch']
+            start_step = checkpoint['step']
+            if world_size > 1:
+                # Wrap the model again if needed after loading state_dict
+                model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank)
+            if rank == 0:
+                print(f"Resumed from epoch {start_epoch}, step {start_step}")
 
         # Sampling helpers (same as before)
         def log(t, eps=1e-20):
@@ -139,60 +182,95 @@ def main(rank, world_size, train_data, val_data):
         def decode_tokens(token_ids):
             return sp.decode(token_ids)
 
-        # Training
-        for i in range(NUM_BATCHES):
-            model.train()
-            if world_size > 1 and train_sampler is not None:
-                train_sampler.set_epoch(i)  # Set epoch for reproducibility with DistributedSampler
-            optim.zero_grad()
+        # Training Loop
+        for epoch in range(start_epoch, NUM_EPOCHS):
+            if world_size > 1:
+                train_sampler.set_epoch(epoch)  # For shuffling with DistributedSampler
 
-            for _ in range(GRAD_ACCUM_EVERY):
-                data = next(iter(train_loader))
-                data = data.to(device)
-
-                with autocast():
-                    loss = model(data, return_loss=True)
-                    loss = loss / GRAD_ACCUM_EVERY
-
-                scaler.scale(loss).backward()
-
-            # Gradient clipping and optimizer step
-            scaler.unscale_(optim)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            scaler.step(optim)
-            scaler.update()
-            optim.zero_grad()
-
-            # Validation and Generation (only on rank 0)
             if rank == 0:
-                if i % VALIDATE_EVERY == 0:
-                    model.eval()
-                    with torch.no_grad():
-                        data = next(iter(val_loader))
-                        data = data.to(device)
+                print(f"Starting epoch {epoch + 1}/{NUM_EPOCHS}")
 
-                        with autocast():
-                            val_loss = model(data, return_loss=True)
-                        print(f"Validation loss at step {i}: {val_loss.item():.3f}")
+            for batch_idx, data in enumerate(train_loader):
+                step = start_step + batch_idx
+                model.train()
+                optim.zero_grad()
 
-                if i % GENERATE_EVERY == 0:
-                    model.eval()
-                    with torch.no_grad():
-                        # Sample a random starting point in validation data
-                        start_idx = random.randint(0, len(val_data) - PRIME_LENGTH - 1)
-                        inp = torch.tensor(val_data[start_idx:start_idx + PRIME_LENGTH], dtype=torch.long).to(device)
+                for _ in range(GRAD_ACCUM_EVERY):
+                    data = data.to(device)
 
-                        prime = decode_tokens(inp.tolist())
-                        print(f"Prime text:\n{prime}\n{'*' * 100}")
+                    with autocast():
+                        loss = model(data, return_loss=True)
+                        loss = loss / GRAD_ACCUM_EVERY
 
-                        prompt = inp.unsqueeze(0)  # Add batch dimension
+                    scaler.scale(loss).backward()
 
-                        sampled = base_decoding(model, prompt, PRIME_LENGTH + GENERATE_LENGTH)
-                        sampled_ids = sampled[0].tolist()[PRIME_LENGTH:]  # Exclude the prime tokens
+                # Gradient clipping and optimizer step
+                scaler.unscale_(optim)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                scaler.step(optim)
+                scaler.update()
+                optim.zero_grad()
 
-                        base_decode_output = decode_tokens(sampled_ids)
+                # Validation and Generation (only on rank 0)
+                if rank == 0:
+                    if step % VALIDATE_EVERY == 0:
+                        model.eval()
+                        with torch.no_grad():
+                            data = next(iter(val_loader))
+                            data = data.to(device)
 
-                        print(f"Generated text:\n{base_decode_output}\n")
+                            with autocast():
+                                val_loss = model(data, return_loss=True)
+                            print(f"Validation loss at epoch {epoch + 1}, step {step}: {val_loss.item():.3f}")
+                        model.train()
+
+                    if step % GENERATE_EVERY == 0:
+                        model.eval()
+                        with torch.no_grad():
+                            # Sample a random starting point in validation data
+                            start_idx = random.randint(0, len(val_data) - PRIME_LENGTH - 1)
+                            inp = torch.tensor(val_data[start_idx:start_idx + PRIME_LENGTH], dtype=torch.long).to(device)
+
+                            prime = decode_tokens(inp.tolist())
+                            print(f"Prime text:\n{prime}\n{'*' * 100}")
+
+                            prompt = inp.unsqueeze(0)  # Add batch dimension
+
+                            sampled = base_decoding(model, prompt, PRIME_LENGTH + GENERATE_LENGTH)
+                            sampled_ids = sampled[0].tolist()[PRIME_LENGTH:]  # Exclude the prime tokens
+
+                            base_decode_output = decode_tokens(sampled_ids)
+
+                            print(f"Generated text:\n{base_decode_output}\n")
+                        model.train()
+
+                    # Checkpointing
+                    if step % CHECKPOINT_EVERY == 0:
+                        checkpoint = {
+                            'epoch': epoch,
+                            'step': step,
+                            'model_state_dict': model.module.state_dict() if world_size > 1 else model.state_dict(),
+                            'optimizer_state_dict': optim.state_dict(),
+                            'scaler_state_dict': scaler.state_dict(),
+                        }
+                        checkpoint_filename = f'checkpoint-step-{step}.pt'
+                        torch.save(checkpoint, checkpoint_filename)
+                        print(f"Checkpoint saved at step {step} to {checkpoint_filename}")
+
+            start_step += len(train_loader)
+
+        # Final Checkpoint after training
+        if rank == 0:
+            checkpoint = {
+                'epoch': NUM_EPOCHS,
+                'step': start_step,
+                'model_state_dict': model.module.state_dict() if world_size > 1 else model.state_dict(),
+                'optimizer_state_dict': optim.state_dict(),
+                'scaler_state_dict': scaler.state_dict(),
+            }
+            checkpoint_filename = f'checkpoint-final.pt'
+            torch.save(checkpoint, checkpoint_filename)
+            print(f"Final checkpoint saved to {checkpoint_filename}")
 
         # Clean up
         if world_size > 1:
@@ -205,99 +283,38 @@ def main(rank, world_size, train_data, val_data):
         # Re-raise the exception if you want the process to terminate
         raise e
 
+
 if __name__ == '__main__':
-    # Data preparation and tokenizer training
+    import argparse
 
-    from datasets import load_dataset
+    parser = argparse.ArgumentParser(description='Train minGRULM with checkpointing and multiple epochs.')
 
-    # Load the 'minipile' dataset
-    print("Loading the dataset...")
-    dataset = load_dataset('JeanKaddour/minipile', split='train')
+    # Training hyperparameters
+    parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train for.')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size per GPU.')
+    parser.add_argument('--grad_accum_every', type=int, default=1, help='Gradient accumulation steps.')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
+    parser.add_argument('--validate_every', type=int, default=200, help='Validate every n steps.')
+    parser.add_argument('--generate_every', type=int, default=300, help='Generate text every n steps.')
+    parser.add_argument('--checkpoint_every', type=int, default=1000, help='Save checkpoint every n steps.')
+    parser.add_argument('--checkpoint_path', type=str, default='', help='Path to checkpoint to resume training.')
+    
+    # New arguments for data files
+    parser.add_argument('--train_data', type=str, default='train_data.npy', help='Path to training data file.')
+    parser.add_argument('--val_data', type=str, default='val_data.npy', help='Path to validation data file.')
 
-    import os
-    from tqdm import tqdm
-
-    # Ensure the output directory exists
-    os.makedirs('data', exist_ok=True)
-
-    # Save the dataset to a text file
-    print("Saving the dataset to 'data/dataset.txt'...")
-    with open('data/dataset.txt', 'w', encoding='utf-8') as f:
-        for example in tqdm(dataset, desc="Saving texts"):
-            text = example['text'].strip()
-            if text:
-                f.write(text + '\n')
-
-    import sentencepiece as spm
-
-    tokenizer_model = 'tokenizer.model'
-    if not os.path.exists(tokenizer_model):
-        print("Training the SentencePiece tokenizer on 'data/dataset.txt'...")
-        spm.SentencePieceTrainer.Train(
-            input=dataset_file,
-            model_prefix='tokenizer',
-            vocab_size=32768,  # Adjust vocab size as needed
-            character_coverage=1.0,
-            model_type='bpe'  # You can also try 'unigram' or other types
-        )
-    else:
-        print(f"'{tokenizer_model}' already exists. Skipping training...")
-    print("Loading the trained SentencePiece tokenizer...")
-    sp = spm.SentencePieceProcessor()
-    sp.load('tokenizer.model')
-
-    # Get vocabulary size
-    vocab_size = sp.get_piece_size()
-    print(f"Vocabulary size: {vocab_size}")
-
-    from multiprocessing import Pool
-    from itertools import chain
-
-    def tokenize_batch(batch_texts):
-        return sp.encode(batch_texts, out_type=int)
-
-    # Extract texts from the dataset
-    texts = [example['text'].strip() for example in dataset if example['text'].strip()]
-
-    batch_size = 1000  # Adjust based on your memory constraints
-    num_processes = 16  # Adjust based on your CPU cores
-
-    # Split texts into batches
-    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
-
-    print("Tokenizing the dataset using batch processing and multiprocessing...")
-    with Pool(processes=num_processes) as pool:
-        tokenized_batches = list(tqdm(
-            pool.imap(tokenize_batch, batches),
-            total=len(batches),
-            desc="Tokenizing"
-        ))
-
-    # Flatten the tokenized data
-    print("Flattening token IDs...")
-    tokenized_data = list(chain.from_iterable(chain.from_iterable(tokenized_batches)))
-
-    # Split the tokenized data into training and validation sets
-    split_idx = int(len(tokenized_data) * 0.9)
-    train_data = tokenized_data[:split_idx]
-    val_data = tokenized_data[split_idx:]
-
-    # Uncomment the following lines to test without multiprocessing
-    '''
-    world_size = 1
-    main(0, world_size, train_data, val_data)
-    '''
+    args = parser.parse_args()
 
     # To run with multiprocessing
     world_size = torch.cuda.device_count()
 
     if world_size > 1:
         os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '12355'
+        os.environ['MASTER_PORT'] = '5554'
 
         mp.spawn(main,
-                 args=(world_size, train_data, val_data),
+                 args=(world_size, args.train_data, args.val_data, args),
                  nprocs=world_size,
                  join=True)
     else:
-        main(0, world_size, train_data, val_data)
+        main(0, world_size, args.train_data, args.val_data, args)
