@@ -36,9 +36,9 @@ def main(rank, world_size, train_data, val_data):
         LEARNING_RATE = 1e-4
         VALIDATE_EVERY = 100
         PRIME_LENGTH = 128
-        GENERATE_EVERY = 10
+        GENERATE_EVERY = 500
         GENERATE_LENGTH = 256
-        SEQ_LEN = 256
+        SEQ_LEN = 1024
 
         # Load the SentencePiece tokenizer
         sp = spm.SentencePieceProcessor()
