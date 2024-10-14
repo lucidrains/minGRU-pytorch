@@ -55,7 +55,7 @@ class minGRU(Module):
             log_values = log_z + log_tilde_h
 
             if exists(prev_hidden):
-                log_values = torch.cat((log_g(prev_hidden), log_values), dim = 1)
+                log_values = torch.cat((prev_hidden.log(), log_values), dim = 1)
                 log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
 
             out = heinsen_associative_scan_log(log_coeffs, log_values)
