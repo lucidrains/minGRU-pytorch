@@ -2,6 +2,8 @@
 
 Implementation of the proposed <a href="https://arxiv.org/abs/2410.01201v1">minGRU</a> in Pytorch, only the log-space numerically stable version.
 
+<a href="https://www.youtube.com/watch?v=jE9jAZC42NE">Yannic's paper review</a>
+
 ## Install
 
 ```bash
