@@ -71,8 +71,11 @@ def base_decoding(
     prev_hiddens = None
 
     for _ in range(sample_num_times):
-        logits, prev_hiddens = net(out, return_prev_hiddens = True)
+        logits, next_prev_hiddens = net(out, return_prev_hiddens = True, prev_hiddens = prev_hiddens)
         logits = logits[:, -1]
+
+        if net.can_cache:
+            prev_hiddens = next_prev_hiddens
 
         logits = top_k(logits, thres = filter_thres)
         sample = gumbel_sample(logits, temperature = temperature, dim = -1)

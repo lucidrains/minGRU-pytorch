@@ -77,6 +77,8 @@ class minGRULM(Module):
         self.norm = RMSNorm(dim)
         self.to_logits = nn.Linear(dim, num_tokens, bias = False)
 
+        self.can_cache = not enable_conv
+
     def forward(
         self,
         x,
