@@ -1,6 +1,6 @@
 [project]
 name = "minGRU-pytorch"
-version = "0.0.14"
+version = "0.1.0"
 description = "minGRU"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -23,7 +23,8 @@ classifiers=[
 ]
 
 dependencies = [
-    "torch>=2.0",
+    "einops>=0.8.0",
+    "torch>=2.4",
 ]
 
 [project.urls]

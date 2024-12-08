@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.nn import Module, ModuleList
+from torch.nn import Module, ModuleList, RMSNorm
 
 from minGRU_pytorch.minGRU import minGRU
 
@@ -12,15 +12,6 @@ def default(v, d):
     return v if exists(v) else d
 
 # classes
-
-class RMSNorm(Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.scale = dim ** 0.5
-        self.gamma = nn.Parameter(torch.zeros(dim))
-
-    def forward(self, x):
-        return F.normalize(x, dim = -1) * self.scale * (self.gamma + 1)
 
 def FeedForward(dim, mult = 4):
     dim_inner = int(dim * mult)

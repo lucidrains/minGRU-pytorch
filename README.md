@@ -66,3 +66,14 @@ $ python train.py
     url     = {https://api.semanticscholar.org/CorpusID:273025630}
 }
 ```
+
+```bibtex
+@inproceedings{anonymous2024hymba,
+    title   = {Hymba: A Hybrid-head Architecture for Small Language Models},
+    author  = {Anonymous},
+    booktitle = {Submitted to The Thirteenth International Conference on Learning Representations},
+    year    = {2024},
+    url     = {https://openreview.net/forum?id=A1ztozypga},
+    note    = {under review}
+}
+```
