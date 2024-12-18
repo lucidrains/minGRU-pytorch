@@ -26,12 +26,15 @@ class minGRUAttnHybrid(Module):
         dim,
         dim_head = 64,
         heads = 8,
+        learned_mix = True
     ):
         super().__init__()
         self.heads = heads
         dim_inner = heads * dim_head
 
         self.to_qkv = nn.Linear(dim, dim_inner * 3, bias = False)
+
+        self.to_mix = nn.Sequential(nn.RMSNorm(dim), nn.Linear(dim, heads, bias = False)) if learned_mix else None
 
         self.rnn = minGRU(dim, expansion_factor = dim_inner / dim, proj_out = False)
 
@@ -59,9 +62,19 @@ class minGRUAttnHybrid(Module):
             is_causal = True
         )
 
+        # in paper, they simply averaged the two branches
+
+        mix = 0.5
+
+        if exists(self.to_mix):
+            # maybe learned per-token / head mixing
+            mix = self.to_mix(x).sigmoid()
+            mix = rearrange(mix, 'b n h -> b h n 1')
+
         # the scheme for hybridizing is normalizing + scaling each branch then averaging
 
-        out = 0.5 * (self.rnn_out_norm(rnn_out) + self.attn_out_norm(attn_out))
+
+        out = mix * (self.rnn_out_norm(rnn_out) + (1. - mix) * self.attn_out_norm(attn_out))
 
         out = rearrange(out, 'b h n d -> b n (h d)')
 
