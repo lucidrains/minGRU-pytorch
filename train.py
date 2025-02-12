@@ -9,7 +9,7 @@ from torch.optim import Adam
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
-from minGRU_pytorch.minGRULM import minGRULM
+from minLM.minLM import minLM
 
 # constants
 
@@ -84,12 +84,13 @@ def base_decoding(
 
     return out[..., prompt_seq_len:]
 
-# the minGRU char language model
+# the min{GRU|LSTM} char language model
 
-model = minGRULM(
+model = minLM(
     num_tokens = 256,
     dim = 512,
-    depth = 6
+    depth = 6,
+    use_lstm = False # set to True for minLSTM
 ).cuda()
 
 # prepare enwik8 data

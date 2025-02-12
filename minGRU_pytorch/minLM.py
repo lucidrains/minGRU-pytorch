@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.nn import Module, ModuleList, RMSNorm
 
 from minGRU_pytorch.minGRU import minGRU
+from minGRU_pytorch.minLSTM import minLSTM
 
 def exists(v):
     return v is not None
@@ -39,7 +40,7 @@ class CausalDepthWiseConv1d(Module):
 
 # main class
 
-class minGRULM(Module):
+class minLM(Module):
     def __init__(
         self,
         *,
@@ -47,8 +48,9 @@ class minGRULM(Module):
         dim,
         depth,
         ff_mult = 4,
-        min_gru_expansion = 1.5,
+        expansion = 1.5,
         conv_kernel_size = 3,
+        use_lstm = False,
         enable_conv = False
     ):
         super().__init__()
@@ -56,11 +58,13 @@ class minGRULM(Module):
 
         self.layers = ModuleList([])
 
+        min_rnn_klass = minGRU if not use_lstm else minLSTM
+
         for _ in range(depth):
             self.layers.append(ModuleList([
                 CausalDepthWiseConv1d(dim, conv_kernel_size) if enable_conv else None,
                 RMSNorm(dim),
-                minGRU(dim, expansion_factor = min_gru_expansion),
+                min_rnn_klass(dim, expansion_factor = expansion),
                 RMSNorm(dim),
                 FeedForward(dim, mult = ff_mult)
             ]))
