@@ -9,7 +9,7 @@ from torch.optim import Adam
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
-from minLM.minLM import minLM
+from minGRU_pytorch.minLM import minLM
 
 # constants
 
