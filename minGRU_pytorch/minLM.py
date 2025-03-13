@@ -100,7 +100,7 @@ class minLM(Module):
             # conv
 
             if exists(conv):
-                assert not exists(prev_hiddens), 'caching not supported for conv version'
+                assert len(list(prev_hiddens)) == 0, 'caching not supported for conv version'
                 x = conv(x) + x
 
             # min gru
