@@ -51,7 +51,8 @@ class minLM(Module):
         expansion = 1.5,
         conv_kernel_size = 3,
         use_lstm = False,
-        enable_conv = False
+        enable_conv = False,
+        dropout = 0.
     ):
         super().__init__()
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -66,7 +67,8 @@ class minLM(Module):
                 RMSNorm(dim),
                 min_rnn_klass(dim, expansion_factor = expansion),
                 RMSNorm(dim),
-                FeedForward(dim, mult = ff_mult)
+                FeedForward(dim, mult = ff_mult),
+                nn.Dropout(dropout) if dropout > 0. else None
             ]))
 
         self.norm = RMSNorm(dim)
@@ -95,7 +97,7 @@ class minLM(Module):
         next_prev_hiddens = []
         prev_hiddens = iter(default(prev_hiddens, []))
 
-        for conv, norm, mingru, ff_norm, ff in self.layers:
+        for conv, norm, mingru, ff_norm, ff, dropout in self.layers:
 
             # conv
 
@@ -119,6 +121,11 @@ class minLM(Module):
             # feedforward
 
             x = ff(ff_norm(x)) + x
+            
+            # dropout
+            
+            if exists(dropout):
+                x = dropout(x)
 
         embed = self.norm(x)
         logits = self.to_logits(embed)
