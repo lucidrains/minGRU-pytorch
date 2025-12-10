@@ -1,3 +1,6 @@
+import os
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 import math
 import gzip
 import random
@@ -8,6 +11,7 @@ import torch
 from torch.optim import Adam
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
+from accelerate import Accelerator
 
 from minGRU_pytorch.hybridLM import hybridLM
 
@@ -79,6 +83,10 @@ def base_decoding(
 
     return out[..., prompt_seq_len:]
 
+# accelerators
+
+accelerator = Accelerator()
+
 # the minGRU char language model
 
 model = hybridLM(
@@ -87,7 +95,7 @@ model = hybridLM(
     depth = 6,
     dim_head = 64,
     heads = 8
-).cuda()
+)
 
 # prepare enwik8 data
 
@@ -108,7 +116,7 @@ class TextSamplerDataset(Dataset):
     def __getitem__(self, index):
         rand_start = torch.randint(0, self.data.size(0) - self.seq_len, (1,))
         full_seq = self.data[rand_start : rand_start + self.seq_len + 1].long()
-        return full_seq.cuda()
+        return full_seq
 
 train_dataset = TextSamplerDataset(data_train, SEQ_LEN)
 val_dataset = TextSamplerDataset(data_val, SEQ_LEN)
@@ -118,6 +126,10 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE)
 # optimizer
 
 optim = Adam(model.parameters(), lr = LEARNING_RATE)
+
+model, optim, train_loader, val_loader = accelerator.prepare(
+    model, optim, train_loader, val_loader
+)
 
 train_loader = cycle(train_loader)
 val_loader = cycle(val_loader)
@@ -132,11 +144,11 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval = 10.0, desc = "training"):
 
         loss = model(data, return_loss = True)
 
-        (loss / GRAD_ACCUM_EVERY).backward()
+        accelerator.backward(loss / GRAD_ACCUM_EVERY)
 
-    print(f"training loss: {loss.item():.3f}")
+    accelerator.print(f"training loss: {loss.item():.3f}")
 
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+    accelerator.clip_grad_norm_(model.parameters(), 0.5)
 
     optim.step()
     optim.zero_grad()
@@ -147,16 +159,16 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval = 10.0, desc = "training"):
             valid_data = next(val_loader)
 
             loss = model(valid_data, return_loss = True)
-            print(f"validation loss: {loss.item():.3f}")
+            accelerator.print(f"validation loss: {loss.item():.3f}")
 
     if i % GENERATE_EVERY == 0:
         model.eval()
 
         inp = random.choice(val_dataset)[:PRIME_LENGTH]
-        inp = inp.cuda()
+        inp = inp.to(accelerator.device)
 
         prime = decode_tokens(inp)
-        print(f"INPUT: {prime}")
+        accelerator.print(f"INPUT: {prime}")
 
         prompt = inp[None, ...]
 
@@ -164,4 +176,4 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval = 10.0, desc = "training"):
 
         base_decode_output = decode_tokens(sampled[0])
 
-        print(f"\nOUTPUT: {base_decode_output}")
+        accelerator.print(f"\nOUTPUT: {base_decode_output}")
